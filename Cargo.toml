@@ -10,5 +10,3 @@ keywords = ["rng", "random"]
 documentation = "https://docs.rs/hel-random"
 readme = "README.md"
 
-[dev-dependencies]
-colored = "2.0.0"
