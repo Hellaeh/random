@@ -25,11 +25,13 @@ static mut LOCAL_STATE: LocalStateType = [0, 0, 0, 0];
 #[thread_local]
 static mut INIT: Once = Once::new();
 
+// WARNING: this function might be optimized away by the compiler
+// Using `std::hint::black_box` could be insufficient
 fn init() {
 	unsafe {
 		use std::alloc::*;
 
-		let seed = SHARED_STATE.fetch_add(1, Ordering::Relaxed) as Target;
+		let mult = SHARED_STATE.fetch_add(1, Ordering::Relaxed) as Target;
 
 		let mut res = LOCAL_STATE;
 
@@ -44,31 +46,47 @@ fn init() {
 
 		let garbage_arr = &mut *(ptr as *mut [Target; ALLOC]);
 
-		let addr = ptr as Target;
-		// Also use pointer itself as value
+		let addr = std::hint::black_box(ptr as Target);
+		// Will be used if there's no garbage on the heap
 		let mut bits = addr ^ (addr >> 11) ^ (addr.rotate_right(30));
 		// Looking for garbage on the heap, while writing some garbage back
-		for (i, trash) in garbage_arr.iter_mut().enumerate() {
+		for (i, garbage) in garbage_arr.iter_mut().enumerate() {
 			let current = &mut res[i % LOCAL_STATE_SIZE];
 
-			let val = match *trash {
+			let val = std::hint::black_box(match *garbage {
 				0 => {
-					let msb = (bits & 1) ^ ((bits >> 1) & 1);
+					let msb = ((bits & 1) ^ ((bits >> 1) & 1)) << (Target::BITS - 1);
 					bits >>= 1;
-					bits |= msb << 15;
+					bits |= msb;
 					bits
 				}
 				n => n,
-			};
+			});
 
-			*current = (*current ^ val).wrapping_mul(seed);
+			*current = (*current ^ val).wrapping_mul(mult);
 
-			*trash = val
+			*garbage = val
 		}
 
 		LOCAL_STATE = res;
 
 		dealloc(ptr, layout)
+	}
+}
+
+#[inline]
+fn xoshiro256pp() {
+	unsafe {
+		let s = LOCAL_STATE[1] << 17;
+
+		LOCAL_STATE[2] ^= LOCAL_STATE[0];
+		LOCAL_STATE[3] ^= LOCAL_STATE[1];
+		LOCAL_STATE[1] ^= LOCAL_STATE[2];
+		LOCAL_STATE[0] ^= LOCAL_STATE[3];
+
+		LOCAL_STATE[2] ^= s;
+
+		LOCAL_STATE[3] = LOCAL_STATE[3].rotate_left(45);
 	}
 }
 
@@ -88,7 +106,7 @@ macro_rules! make {
 		#[inline]
 		pub fn $type() -> $type {
 			unsafe {
-				// this adds 2x performance loss
+				// this adds 3x performance loss
 				// TODO remove it: make user call it explicitly or 'life before main'
 				INIT.call_once(init);
 
@@ -102,27 +120,22 @@ macro_rules! make {
 	};
 }
 
+make!(u128, {
+	xoshiro256pp();
+
+	LOCAL_STATE[0].wrapping_add(LOCAL_STATE[2]) as u128
+		| (((LOCAL_STATE[1]).wrapping_add(LOCAL_STATE[3]) as u128) << 64)
+});
+make!(i128, { u128() as i128 });
+
 make!(u64, {
-	let res = LOCAL_STATE[0]
+	xoshiro256pp();
+
+	LOCAL_STATE[0]
 		.wrapping_add(LOCAL_STATE[3])
 		.rotate_left(23)
-		.wrapping_add(LOCAL_STATE[0]);
-
-	let s = LOCAL_STATE[1] << 17;
-
-	LOCAL_STATE[2] ^= LOCAL_STATE[0];
-	LOCAL_STATE[3] ^= LOCAL_STATE[1];
-	LOCAL_STATE[1] ^= LOCAL_STATE[2];
-	LOCAL_STATE[0] ^= LOCAL_STATE[3];
-
-	LOCAL_STATE[2] ^= s;
-
-	LOCAL_STATE[3] = LOCAL_STATE[3].rotate_left(45);
-
-	res
+		.wrapping_add(LOCAL_STATE[0])
 });
-make!(u128, { u64() as u128 | ((u64() as u128) << 64) });
-make!(i128, { u128() as i128 });
 make!(i64);
 make!(u32);
 make!(i32);
@@ -130,12 +143,13 @@ make!(u16);
 make!(i16);
 make!(u8);
 make!(i8);
+
 make!(bool, {
 	loop {
-		let r = u64();
+		xoshiro256pp();
 
-		let a = (r & 1) == 1;
-		let b = (r & 2) == 2;
+		let a = (LOCAL_STATE[0] & 1) == 1;
+		let b = (LOCAL_STATE[2] & 1) == 1;
 
 		if a != b {
 			return a;
@@ -181,7 +195,17 @@ mod tests {
 		($test_name: ident, $subject: ident) => {
 			#[bench]
 			fn $test_name(b: &mut Bencher) {
-				b.iter($subject)
+				let w = b.iter(|| {
+					let mut res = $subject();
+
+					for _ in 0..1_000_000 {
+						res = $subject();
+					}
+
+					res
+				});
+
+				assert!(u64() > 0);
 			}
 		};
 	}
