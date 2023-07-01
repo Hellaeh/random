@@ -18,7 +18,7 @@ static mut SHARED_STATE: AtomicUsize = AtomicUsize::new(1);
 #[thread_local]
 // Will be used as a primal rng state
 static mut LOCAL_STATE: LocalStateType = [0, 0, 0, 0];
-// TODO remove this
+
 #[thread_local]
 static mut INITED: bool = false;
 
@@ -89,7 +89,7 @@ fn xoshiro256pp() {
 
 macro_rules! make {
 	($type: ident, $rest: block) => {
-		#[doc = concat!("Will generate a random", stringify!($type))]
+		#[doc = concat!("Will generate a random ", stringify!($type))]
 		///
 		/// # Example
 		/// ```
@@ -103,6 +103,7 @@ macro_rules! make {
 		#[inline]
 		pub fn $type() -> $type {
 			unsafe {
+				// This adds almost no overhead compared to `std::sync::Once`
 				if !INITED {
 					init();
 					INITED = true;
