@@ -6,10 +6,7 @@
 #![feature(thread_local)]
 #![feature(const_alloc_layout)]
 
-use std::sync::{
-	atomic::{AtomicUsize, Ordering},
-	Once,
-};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 const LOCAL_STATE_SIZE: usize = 4;
 
@@ -23,7 +20,7 @@ static mut SHARED_STATE: AtomicUsize = AtomicUsize::new(1);
 static mut LOCAL_STATE: LocalStateType = [0, 0, 0, 0];
 // TODO remove this
 #[thread_local]
-static mut INIT: Once = Once::new();
+static mut INITED: bool = false;
 
 // WARNING: this function might be optimized away by the compiler
 // Using `std::hint::black_box` could be insufficient
@@ -106,9 +103,10 @@ macro_rules! make {
 		#[inline]
 		pub fn $type() -> $type {
 			unsafe {
-				// this adds 3x performance loss
-				// TODO remove it: make user call it explicitly or 'life before main'
-				INIT.call_once(init);
+				if !INITED {
+					init();
+					INITED = true;
+				}
 
 				$rest
 			}
@@ -195,7 +193,7 @@ mod tests {
 		($test_name: ident, $subject: ident) => {
 			#[bench]
 			fn $test_name(b: &mut Bencher) {
-				let w = b.iter(|| {
+				let _w = b.iter(|| {
 					let mut res = $subject();
 
 					for _ in 0..1_000_000 {
