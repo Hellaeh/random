@@ -1,7 +1,7 @@
 [package]
 name = "hel-random"
 authors = ["Hellaeh <me@hellaeh.com>"]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Simple RNG with weak entropy source (alloc) and xoshiro256++ hashing"
 license = "GPL-3.0"
@@ -9,4 +9,3 @@ repository = "https://github.com/Hellaeh/random.git"
 keywords = ["rng", "random"]
 documentation = "https://docs.rs/hel-random"
 readme = "README.md"
-
