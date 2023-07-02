@@ -1,10 +1,8 @@
 //! A simple pseudo non-cryptographic random number generator.
 //! Using xoshiro256++ under the hood.
-#![deny(missing_docs)]
+#![warn(missing_docs)]
 //
 #![feature(test)]
-#![feature(thread_local)]
-#![feature(const_alloc_layout)]
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -15,11 +13,9 @@ type LocalStateType = [Target; LOCAL_STATE_SIZE];
 
 // Will be used as a multiplier for thread local rng
 static mut SHARED_STATE: AtomicUsize = AtomicUsize::new(1);
-#[thread_local]
 // Will be used as a primal rng state
 static mut LOCAL_STATE: LocalStateType = [0, 0, 0, 0];
 
-#[thread_local]
 static mut INITED: bool = false;
 
 // WARNING: this function might be optimized away by the compiler
@@ -191,9 +187,17 @@ mod tests {
 	}
 
 	macro_rules! make_test {
-		($test_name: ident, $subject: ident) => {
+		($test_name: ident, $bench_name: ident, $subject: ident) => {
 			#[bench]
 			fn $test_name(b: &mut Bencher) {
+				let _w = b.iter($subject);
+
+				assert!(u64() > 0);
+			}
+
+			#[bench]
+			#[ignore = "generating 1_000_000 result. Use 'cargo bench -- --ignored'"]
+			fn $bench_name(b: &mut Bencher) {
 				let _w = b.iter(|| {
 					let mut res = $subject();
 
@@ -209,17 +213,17 @@ mod tests {
 		};
 	}
 
-	make_test!(test_u128, u128);
-	make_test!(test_i128, i128);
-	make_test!(test_u64, u64);
-	make_test!(test_i64, i64);
-	make_test!(test_u32, u32);
-	make_test!(test_i32, i32);
-	make_test!(test_u16, u16);
-	make_test!(test_i16, i16);
-	make_test!(test_u8, u8);
-	make_test!(test_i8, i8);
-	make_test!(test_bool, bool);
+	make_test!(test_u128, bench_u128, u128);
+	make_test!(test_i128, bench_i128, i128);
+	make_test!(test_u64, bench_u64, u64);
+	make_test!(test_i64, bench_i64, i64);
+	make_test!(test_u32, bench_u32, u32);
+	make_test!(test_i32, bench_i32, i32);
+	make_test!(test_u16, bench_u16, u16);
+	make_test!(test_i16, bench_i16, i16);
+	make_test!(test_u8, bench_u8, u8);
+	make_test!(test_i8, bench_i8, i8);
+	make_test!(test_bool, bench_bool, bool);
 
 	macro_rules! make_ignored {
 		($test_name: ident, $fn_name: ident) => {
@@ -255,7 +259,7 @@ mod tests {
 
 	#[test]
 	fn multithreaded() {
-		const THREADS: usize = 128;
+		const THREADS: usize = 1024;
 		let mut threads = Vec::new();
 
 		for _ in 0..THREADS {
