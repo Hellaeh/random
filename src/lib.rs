@@ -6,15 +6,15 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-const LOCAL_STATE_SIZE: usize = 4;
+const STATE_SIZE: usize = 4;
 
 type Target = u64;
-type LocalStateType = [Target; LOCAL_STATE_SIZE];
+type StateType = [Target; STATE_SIZE];
 
 // Will be used as a multiplier for thread local rng
-static mut SHARED_STATE: AtomicUsize = AtomicUsize::new(1);
+static mut COUNTER: AtomicUsize = AtomicUsize::new(1);
 // Will be used as a primal rng state
-static mut LOCAL_STATE: LocalStateType = [0, 0, 0, 0];
+static mut STATE: StateType = [0, 0, 0, 0];
 
 static mut INITED: bool = false;
 
@@ -24,11 +24,11 @@ fn init() {
 	unsafe {
 		use std::alloc::*;
 
-		let mult = SHARED_STATE.fetch_add(1, Ordering::Relaxed) as Target;
+		let mult = COUNTER.fetch_add(1, Ordering::Relaxed) as Target;
 
-		let mut res = LOCAL_STATE;
+		let mut res = STATE;
 
-		const ALLOC: usize = LOCAL_STATE_SIZE * LOCAL_STATE_SIZE;
+		const ALLOC: usize = STATE_SIZE * STATE_SIZE;
 
 		let layout = Layout::array::<Target>(ALLOC).unwrap();
 		let ptr = alloc(layout);
@@ -44,7 +44,7 @@ fn init() {
 		let mut bits = addr ^ (addr >> 11) ^ (addr.rotate_right(30));
 		// Looking for garbage on the heap, while writing some garbage back
 		for (i, garbage) in garbage_arr.iter_mut().enumerate() {
-			let current = &mut res[i % LOCAL_STATE_SIZE];
+			let current = &mut res[i % STATE_SIZE];
 
 			let val = std::hint::black_box(match *garbage {
 				0 => {
@@ -61,7 +61,7 @@ fn init() {
 			*garbage = val
 		}
 
-		LOCAL_STATE = res;
+		STATE = res;
 
 		dealloc(ptr, layout)
 	}
@@ -70,16 +70,16 @@ fn init() {
 #[inline]
 fn xoshiro256pp() {
 	unsafe {
-		let s = LOCAL_STATE[1] << 17;
+		let s = STATE[1] << 17;
 
-		LOCAL_STATE[2] ^= LOCAL_STATE[0];
-		LOCAL_STATE[3] ^= LOCAL_STATE[1];
-		LOCAL_STATE[1] ^= LOCAL_STATE[2];
-		LOCAL_STATE[0] ^= LOCAL_STATE[3];
+		STATE[2] ^= STATE[0];
+		STATE[3] ^= STATE[1];
+		STATE[1] ^= STATE[2];
+		STATE[0] ^= STATE[3];
 
-		LOCAL_STATE[2] ^= s;
+		STATE[2] ^= s;
 
-		LOCAL_STATE[3] = LOCAL_STATE[3].rotate_left(45);
+		STATE[3] = STATE[3].rotate_left(45);
 	}
 }
 
@@ -118,18 +118,17 @@ macro_rules! make {
 make!(u128, {
 	xoshiro256pp();
 
-	LOCAL_STATE[0].wrapping_add(LOCAL_STATE[2]) as u128
-		| (((LOCAL_STATE[1]).wrapping_add(LOCAL_STATE[3]) as u128) << 64)
+	STATE[0].wrapping_add(STATE[2]) as u128 | (((STATE[1]).wrapping_add(STATE[3]) as u128) << 64)
 });
 make!(i128, { u128() as i128 });
 
 make!(u64, {
 	xoshiro256pp();
 
-	LOCAL_STATE[0]
-		.wrapping_add(LOCAL_STATE[3])
+	STATE[0]
+		.wrapping_add(STATE[3])
 		.rotate_left(23)
-		.wrapping_add(LOCAL_STATE[0])
+		.wrapping_add(STATE[0])
 });
 make!(i64);
 make!(u32);
@@ -143,8 +142,8 @@ make!(bool, {
 	loop {
 		xoshiro256pp();
 
-		let a = (LOCAL_STATE[0] & 1) == 1;
-		let b = (LOCAL_STATE[2] & 1) == 1;
+		let a = (STATE[0] & 1) == 1;
+		let b = (STATE[2] & 1) == 1;
 
 		if a != b {
 			return a;
@@ -171,10 +170,10 @@ mod tests {
 
 			bool();
 
-			println!("State: {:?}", LOCAL_STATE);
+			println!("State: {:?}", STATE);
 			println!(
 				"Population: {}",
-				LOCAL_STATE.iter().fold(0, |acc, s| acc + s.count_ones())
+				STATE.iter().fold(0, |acc, s| acc + s.count_ones())
 			);
 
 			for _ in 0..TRIES {
@@ -233,7 +232,7 @@ mod tests {
 				$fn_name();
 
 				unsafe {
-					println!("{:?}", LOCAL_STATE);
+					println!("{:?}", STATE);
 				}
 
 				for _ in 0..100 {
@@ -263,7 +262,15 @@ mod tests {
 		let mut threads = Vec::new();
 
 		for _ in 0..THREADS {
-			threads.push(std::thread::spawn(u64))
+			threads.push(std::thread::spawn(|| {
+				let mut res = u64();
+
+				for _ in 0..1_000 {
+					res = u64();
+				}
+
+				res
+			}))
 		}
 
 		let mut res: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
