@@ -4,68 +4,65 @@
 //
 #![feature(test)]
 
-use std::sync::atomic::{AtomicUsize, Ordering};
-
 const STATE_SIZE: usize = 4;
 
 type Target = u64;
 type StateType = [Target; STATE_SIZE];
 
-// Will be used as a multiplier for thread local rng
-static mut COUNTER: AtomicUsize = AtomicUsize::new(1);
-// Will be used as a primal rng state
 static mut STATE: StateType = [0, 0, 0, 0];
 
-static mut INITED: bool = false;
+#[used]
+#[cfg_attr(target_os = "linux", link_section = ".init_array")]
+#[cfg_attr(target_os = "macos", link_section = "__DATA,__mod_init_func")]
+#[cfg_attr(target_os = "windows", link_section = ".CRT$XCU")]
+static INIT: extern "C" fn() = {
+	extern "C" fn init() {
+		unsafe {
+			use std::alloc::*;
 
-// WARNING: this function might be optimized away by the compiler
-// Using `std::hint::black_box` could be insufficient
-fn init() {
-	unsafe {
-		use std::alloc::*;
+			let mut res = STATE;
 
-		let mult = COUNTER.fetch_add(1, Ordering::Relaxed) as Target;
+			const ALLOC: usize = STATE_SIZE * STATE_SIZE;
 
-		let mut res = STATE;
+			let layout = Layout::array::<Target>(ALLOC).unwrap();
+			let ptr = alloc(layout);
 
-		const ALLOC: usize = STATE_SIZE * STATE_SIZE;
+			if ptr.is_null() {
+				handle_alloc_error(layout);
+			}
 
-		let layout = Layout::array::<Target>(ALLOC).unwrap();
-		let ptr = alloc(layout);
+			let garbage_arr = &mut *(ptr as *mut [Target; ALLOC]);
 
-		if ptr.is_null() {
-			handle_alloc_error(layout);
+			// Will be used if there's no garbage on the heap
+			let addr = std::hint::black_box(ptr as Target);
+			let mut bits = addr ^ (addr >> 11) ^ (addr.rotate_right(30));
+
+			// Looking for garbage on the heap, while writing some garbage back
+			for (i, garbage) in garbage_arr.iter_mut().enumerate() {
+				let current = &mut res[i % STATE_SIZE];
+
+				let val = std::hint::black_box(match *garbage {
+					0 => {
+						let msb = ((bits & 1) ^ ((bits >> 1) & 1)) << (Target::BITS - 1);
+						bits >>= 1;
+						bits |= msb;
+						bits
+					}
+					n => n,
+				});
+
+				*current ^= val;
+				*garbage = val
+			}
+
+			STATE = res;
+
+			dealloc(ptr, layout)
 		}
-
-		let garbage_arr = &mut *(ptr as *mut [Target; ALLOC]);
-
-		let addr = std::hint::black_box(ptr as Target);
-		// Will be used if there's no garbage on the heap
-		let mut bits = addr ^ (addr >> 11) ^ (addr.rotate_right(30));
-		// Looking for garbage on the heap, while writing some garbage back
-		for (i, garbage) in garbage_arr.iter_mut().enumerate() {
-			let current = &mut res[i % STATE_SIZE];
-
-			let val = std::hint::black_box(match *garbage {
-				0 => {
-					let msb = ((bits & 1) ^ ((bits >> 1) & 1)) << (Target::BITS - 1);
-					bits >>= 1;
-					bits |= msb;
-					bits
-				}
-				n => n,
-			});
-
-			*current = (*current ^ val).wrapping_mul(mult);
-
-			*garbage = val
-		}
-
-		STATE = res;
-
-		dealloc(ptr, layout)
 	}
-}
+
+	init
+};
 
 #[inline]
 fn xoshiro256pp() {
@@ -84,7 +81,7 @@ fn xoshiro256pp() {
 }
 
 macro_rules! make {
-	($type: ident, $rest: block) => {
+	($type: ident, $code: block) => {
 		#[doc = concat!("Will generate a random ", stringify!($type))]
 		///
 		/// # Example
@@ -96,17 +93,11 @@ macro_rules! make {
 		///     assert!(a != b);
 		/// }
 		/// ```
+		//
 		#[inline]
+		#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 		pub fn $type() -> $type {
-			unsafe {
-				// This adds almost no overhead compared to `std::sync::Once`
-				if !INITED {
-					init();
-					INITED = true;
-				}
-
-				$rest
-			}
+			$code
 		}
 	};
 
@@ -118,17 +109,20 @@ macro_rules! make {
 make!(u128, {
 	xoshiro256pp();
 
-	STATE[0].wrapping_add(STATE[2]) as u128 | (((STATE[1]).wrapping_add(STATE[3]) as u128) << 64)
+	unsafe {
+		STATE[0].wrapping_add(STATE[2]) as u128 | (((STATE[1]).wrapping_add(STATE[3]) as u128) << 64)
+	}
 });
 make!(i128, { u128() as i128 });
 
 make!(u64, {
 	xoshiro256pp();
-
-	STATE[0]
-		.wrapping_add(STATE[3])
-		.rotate_left(23)
-		.wrapping_add(STATE[0])
+	unsafe {
+		STATE[0]
+			.wrapping_add(STATE[3])
+			.rotate_left(23)
+			.wrapping_add(STATE[0])
+	}
 });
 make!(i64);
 make!(u32);
@@ -142,11 +136,13 @@ make!(bool, {
 	loop {
 		xoshiro256pp();
 
-		let a = (STATE[0] & 1) == 1;
-		let b = (STATE[2] & 1) == 1;
+		unsafe {
+			let a = (STATE[0] & 1) == 1;
+			let b = (STATE[2] & 1) == 1;
 
-		if a != b {
-			return a;
+			if a != b {
+				return a;
+			}
 		}
 	}
 });
@@ -283,5 +279,7 @@ mod tests {
 		println!("{:?}", &set);
 
 		assert_eq!(set.len(), THREADS);
+
+		// assert!(false);
 	}
 }
