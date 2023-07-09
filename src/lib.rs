@@ -80,6 +80,33 @@ fn xoshiro256pp() {
 	}
 }
 
+/// A helper trait to generate random values
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
+pub trait Random: Sized {
+	/// Will generate a random [`Self`]
+	fn random() -> Self;
+}
+
+/// Generic function that returns a random [`T`]
+///
+/// # Example
+/// ```
+/// use hel_random::generate;
+///
+/// let a: u64 = generate();
+/// let b: u32 = generate();
+/// let c = generate::<i128>();
+///
+/// println!("a = {a}");
+/// println!("b = {b}");
+/// println!("c = {c}");
+/// ```
+#[inline(always)]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
+pub fn generate<T: Random>() -> T {
+	T::random()
+}
+
 macro_rules! make {
 	($type: ident, $code: block) => {
 		#[doc = concat!("Will generate a random ", stringify!($type))]
@@ -93,11 +120,26 @@ macro_rules! make {
 		///     assert!(a != b);
 		/// }
 		/// ```
-		//
 		#[inline]
 		#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 		pub fn $type() -> $type {
 			$code
+		}
+
+		impl Random for $type {
+			#[doc = concat!("Will generate a random ", stringify!($type))]
+			///
+			/// # Example
+			/// ```
+			/// use hel_random::Random;
+			///
+			#[doc = concat!("let r = ", stringify!($type), "::random();")]
+			/// println!("r = {r}");
+			/// ```
+			#[inline(always)]
+			fn random() -> Self {
+				$type()
+			}
 		}
 	};
 
@@ -133,10 +175,15 @@ make!(u8);
 make!(i8);
 
 make!(bool, {
-	loop {
-		xoshiro256pp();
+	unsafe {
+		// runtime check is necessary to avoid infinite loop
+		if STATE[0] == 0 {
+			return false;
+		}
 
-		unsafe {
+		loop {
+			xoshiro256pp();
+
 			let a = (STATE[0] & 1) == 1;
 			let b = (STATE[2] & 1) == 1;
 
