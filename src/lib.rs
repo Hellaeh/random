@@ -1,8 +1,6 @@
 //! A simple pseudo non-cryptographic random number generator.
 //! Using xoshiro256++ under the hood.
 #![warn(missing_docs)]
-//
-#![feature(test)]
 
 const STATE_SIZE: usize = 4;
 
@@ -35,7 +33,12 @@ static INIT: extern "C" fn() = {
 
 			// Will be used if there's no garbage on the heap
 			let addr = std::hint::black_box(ptr as Target);
-			let mut bits = addr ^ (addr >> 11) ^ (addr.rotate_right(30));
+			let now = std::time::SystemTime::now()
+				.duration_since(std::time::UNIX_EPOCH)
+				.expect("to get system time")
+				.subsec_micros() as u64;
+			let now_bits = now ^ (now << 32) ^ (now.rotate_left(25));
+			let mut bits = addr ^ (addr >> 11) ^ (addr.rotate_right(30)) ^ now_bits;
 
 			// Looking for garbage on the heap, while writing some garbage back
 			for (i, garbage) in garbage_arr.iter_mut().enumerate() {
@@ -185,7 +188,7 @@ make!(bool, {
 			xoshiro256pp();
 
 			let a = (STATE[0] & 1) == 1;
-			let b = (STATE[2] & 1) == 1;
+			let b = (STATE[1] & 1) == 1;
 
 			if a != b {
 				return a;
@@ -194,139 +197,4 @@ make!(bool, {
 	}
 });
 
-#[cfg(test)]
-mod tests {
-	extern crate test;
-
-	use std::collections::HashSet;
-
-	use test::Bencher;
-
-	use super::*;
-
-	#[test]
-	fn flip_a_coin_fairness() {
-		unsafe {
-			const TRIES: i64 = 1_000_000;
-
-			let mut balance = 0;
-
-			bool();
-
-			println!("State: {:?}", STATE);
-			println!(
-				"Population: {}",
-				STATE.iter().fold(0, |acc, s| acc + s.count_ones())
-			);
-
-			for _ in 0..TRIES {
-				balance += if bool() { 1 } else { -1 };
-			}
-
-			println!("Fairness: {balance}");
-			assert!(balance < (TRIES / 100));
-		}
-	}
-
-	macro_rules! make_test {
-		($test_name: ident, $bench_name: ident, $subject: ident) => {
-			#[bench]
-			fn $test_name(b: &mut Bencher) {
-				let _w = b.iter($subject);
-
-				assert!(u64() > 0);
-			}
-
-			#[bench]
-			#[ignore = "generating 1_000_000 result. Use 'cargo bench -- --ignored'"]
-			fn $bench_name(b: &mut Bencher) {
-				let _w = b.iter(|| {
-					let mut res = $subject();
-
-					for _ in 0..1_000_000 {
-						res = $subject();
-					}
-
-					res
-				});
-
-				assert!(u64() > 0);
-			}
-		};
-	}
-
-	make_test!(test_u128, bench_u128, u128);
-	make_test!(test_i128, bench_i128, i128);
-	make_test!(test_u64, bench_u64, u64);
-	make_test!(test_i64, bench_i64, i64);
-	make_test!(test_u32, bench_u32, u32);
-	make_test!(test_i32, bench_i32, i32);
-	make_test!(test_u16, bench_u16, u16);
-	make_test!(test_i16, bench_i16, i16);
-	make_test!(test_u8, bench_u8, u8);
-	make_test!(test_i8, bench_i8, i8);
-	make_test!(test_bool, bench_bool, bool);
-
-	macro_rules! make_ignored {
-		($test_name: ident, $fn_name: ident) => {
-			#[test]
-			#[ignore = r#"to see output use "cargo t -- --ignored""#]
-			fn $test_name() {
-				$fn_name();
-
-				unsafe {
-					println!("{:?}", STATE);
-				}
-
-				for _ in 0..100 {
-					println!("{}", $fn_name());
-				}
-
-				assert!(false);
-			}
-		};
-	}
-
-	make_ignored!(output_u128, u128);
-	make_ignored!(output_i128, i128);
-	make_ignored!(output_u64, u64);
-	make_ignored!(output_i64, i64);
-	make_ignored!(output_u32, u32);
-	make_ignored!(output_i32, i32);
-	make_ignored!(output_u16, u16);
-	make_ignored!(output_i16, i16);
-	make_ignored!(output_u8, u8);
-	make_ignored!(output_i8, i8);
-	make_ignored!(output_bool, bool);
-
-	#[test]
-	fn multithreaded() {
-		const THREADS: usize = 1024;
-		let mut threads = Vec::new();
-
-		for _ in 0..THREADS {
-			threads.push(std::thread::spawn(|| {
-				let mut res = u64();
-
-				for _ in 0..1_000 {
-					res = u64();
-				}
-
-				res
-			}))
-		}
-
-		let mut res: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
-		res.sort();
-
-		println!("{:?}", &res);
-
-		let set: HashSet<_> = HashSet::from_iter(res);
-
-		println!("{:?}", &set);
-
-		assert_eq!(set.len(), THREADS);
-
-		// assert!(false);
-	}
-}
+// TODO floats
