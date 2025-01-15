@@ -1,6 +1,6 @@
 # hel-random
 
-Simple RNG with weak source of entropy(alloc) and xoshiro256++ hashing
+Simple RNG with weak source of entropy(alloc and sub-μs) and xoshiro256++ hashing
 
 ## Examples
 
