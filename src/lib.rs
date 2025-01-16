@@ -9,6 +9,11 @@ type StateType = [Target; STATE_SIZE];
 
 static mut STATE: StateType = [0, 0, 0, 0];
 
+/// Gets current state of generator
+pub fn get_state() -> StateType {
+	unsafe { STATE }
+}
+
 #[used]
 #[cfg_attr(target_os = "linux", link_section = ".init_array")]
 #[cfg_attr(target_os = "macos", link_section = "__DATA,__mod_init_func")]
@@ -33,10 +38,12 @@ static INIT: extern "C" fn() = {
 
 			// Will be used if there's no garbage on the heap
 			let addr = std::hint::black_box(ptr as Target);
-			let now = std::time::SystemTime::now()
-				.duration_since(std::time::UNIX_EPOCH)
-				.expect("to get system time")
-				.subsec_micros() as u64;
+			let now = std::hint::black_box(
+				std::time::SystemTime::now()
+					.duration_since(std::time::UNIX_EPOCH)
+					.expect("to get system time")
+					.subsec_micros() as u64,
+			);
 			let now_bits = now ^ (now << 32) ^ (now.rotate_left(25));
 			let mut bits = addr ^ (addr >> 11) ^ (addr.rotate_right(30)) ^ now_bits;
 
@@ -44,23 +51,20 @@ static INIT: extern "C" fn() = {
 			for (i, garbage) in garbage_arr.iter_mut().enumerate() {
 				let current = &mut res[i % STATE_SIZE];
 
-				let val = std::hint::black_box(match *garbage {
-					0 => {
-						let msb = ((bits & 1) ^ ((bits >> 1) & 1)) << (Target::BITS - 1);
-						bits >>= 1;
-						bits |= msb;
-						bits
-					}
-					n => n,
-				});
+				let mut val = std::hint::black_box(*garbage);
+				val ^= bits;
+
+				let msb = ((bits & 1) ^ ((bits >> 1) & 1)) << (Target::BITS - 1);
+				bits >>= 1;
+				bits |= msb;
 
 				*current ^= val;
-				*garbage = val
+				std::ptr::write_volatile(garbage, val);
 			}
 
 			STATE = res;
 
-			dealloc(ptr, layout)
+			dealloc(ptr, layout);
 		}
 	}
 
